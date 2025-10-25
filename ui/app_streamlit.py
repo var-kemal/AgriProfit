@@ -407,14 +407,48 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Forecast Quality (rolling backtest)")
+    def _safe_round(v, nd=2):
+        try:
+            return round(float(v), nd)
+        except Exception:
+            return None
+
     st.write(
         {
-            "MAE (QGBR)": round(bt_q["mae"], 2) if not math.isnan(bt_q["mae"]) else None,
-            "MAE (SARIMAX)": round(bt_s["mae"], 2) if not math.isnan(bt_s["mae"]) else None,
-            "sMAPE% (QGBR)": round(bt_q["smape"], 2) if not math.isnan(bt_q["smape"]) else None,
-            "Conformal radius": round(float(radius), 2),
+            "MAE (QGBR)": _safe_round(bt_q.get("mae")),
+            "RMSE (QGBR)": _safe_round(bt_q.get("rmse")),
+            "MASE (QGBR)": _safe_round(bt_q.get("mase")),
+            "R2 (QGBR)": _safe_round(bt_q.get("r2"), 3),
+            "Coverage90 (QGBR)": _safe_round(bt_q.get("coverage90"), 3),
+            "Avg width (QGBR)": _safe_round(bt_q.get("avg_interval_width")),
+            "MAE (SARIMAX)": _safe_round(bt_s.get("mae")),
+            "RMSE (SARIMAX)": _safe_round(bt_s.get("rmse")),
+            "R2 (SARIMAX)": _safe_round(bt_s.get("r2"), 3),
+            "Coverage90 (SARIMAX)": _safe_round(bt_s.get("coverage90"), 3),
+            "Avg width (SARIMAX)": _safe_round(bt_s.get("avg_interval_width")),
+            "sMAPE% (QGBR)": _safe_round(bt_q.get("smape")),
+            "Conformal radius": _safe_round(radius),
         }
     )
+
+    # Horizon-wise breakdowns
+    cqh, csh = st.columns(2)
+    if bt_q.get("by_horizon"):
+        try:
+            df_hq = pd.DataFrame(bt_q["by_horizon"]).T.sort_index()
+            df_hq.index.name = "lead"
+            cqh.markdown("QGBR by horizon")
+            cqh.dataframe(df_hq)
+        except Exception:
+            pass
+    if bt_s.get("by_horizon"):
+        try:
+            df_hs = pd.DataFrame(bt_s["by_horizon"]).T.sort_index()
+            df_hs.index.name = "lead"
+            csh.markdown("SARIMAX by horizon")
+            csh.dataframe(df_hs)
+        except Exception:
+            pass
     with st.expander("How to use"):
         st.markdown(
             "- Upload your CSVs or use the built-in synthetic defaults.\n"
