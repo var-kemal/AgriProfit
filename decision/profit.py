@@ -7,7 +7,7 @@ import pandas as pd
 class FarmParams:
     area_ha: float
     yield_t_per_ha: float
-    price_unit: str  # 'per_kg' or 'per_ton'
+    price_unit: str  
     costs_total: float
 
 

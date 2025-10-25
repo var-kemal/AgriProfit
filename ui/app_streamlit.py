@@ -1,4 +1,5 @@
 import math
+import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -18,6 +19,23 @@ from models.forecast_sarimax import sarimax_forecast
 from models.forecast_quantile_gbr import quantile_gbr_forecast
 from forecast.ensemble import blend_forecasts
 from analysis.backtest import rolling_backtest
+from analysis.eda import (
+    price_overview,
+    rolling_stats,
+    monthly_profile,
+    stationarity as st_stationarity,
+    decompose as st_decompose,
+    anomalies_mad,
+    acf_pacf_values,
+    change_points,
+    cluster_states,
+    data_quality,
+    compute_returns,
+    distribution_stats,
+    seasonal_strength,
+    drawdown as dd_series,
+    insights_report,
+)
 from uncertainty.conformal import conformal_interval, apply_conformal
 
 
@@ -25,8 +43,8 @@ from uncertainty.conformal import conformal_interval, apply_conformal
 # Page setup
 # -----------------------
 st.set_page_config(page_title="AgriProfit v2", layout="wide")
-st.title("AgriProfit v2 - Profit Planning From Price Forecasts")
-st.caption("Upload price history, costs, and yields, or use built-in synthetic data to explore scenarios.")
+st.title("AgriProfit v2 – Data Analysis & Profit Planning")
+st.caption("Upload price history, costs, and yields. Analyze data deeply; forecasting is optional.")
 
 
 # -----------------------
@@ -58,6 +76,9 @@ with st.sidebar:
     y_manual = st.checkbox("Override yield manually?", value=False)
     y_t_ha = st.number_input("Yield (tons/ha)", min_value=0.5, max_value=30.0, value=5.0, step=0.1) if y_manual else None
     price_unit = st.selectbox("Price unit", ["per_kg", "per_ton"], index=1)
+
+    st.header("Mode")
+    enable_forecasting = st.checkbox("Enable forecasting (experimental)", value=False)
 
     st.header("Forecast Settings")
     horizon = st.slider("Forecast horizon (months)", 1, 12, 3, 1)
@@ -133,41 +154,167 @@ def cached_qgbr(prices_df: pd.DataFrame, steps: int):
 
 
 # -----------------------
-# Compute backtest, conformal radius, and forecasts
+# Compute backtest, conformal radius, and forecasts (optional)
 # -----------------------
 if len(prices) < 8:
     st.warning("Very short price history (<8 months). Forecast quality may be poor.")
 
-bt_q = cached_backtest_qgbr(prices, horizon_bt=3)
-bt_s = cached_backtest_sarimax(prices, horizon_bt=3)
-radius = conformal_interval(bt_q["residuals"], alpha=float(interval_alpha)) if len(prices) > 18 else 0.0
+bt_q = {"mae": float("nan")}
+bt_s = {"mae": float("nan")}
+radius = 0.0
+blend = pd.DataFrame(columns=["date", "yhat", "yhat_lo", "yhat_hi"])  # default empty
+if 'enable_forecasting' in globals() and enable_forecasting:
+    bt_q = cached_backtest_qgbr(prices, horizon_bt=3)
+    bt_s = cached_backtest_sarimax(prices, horizon_bt=3)
+    radius = conformal_interval(bt_q.get("residuals", np.array([])), alpha=float(interval_alpha)) if len(prices) > 18 else 0.0
 
-# Weights per model
-eps = 1e-6
-if blend_mode == "Equal weights":
-    weights = [0.5, 0.5]  # [SARIMAX, QGBR]
-elif blend_mode == "Manual weights" and manual_w_sarimax is not None:
-    ws = float(manual_w_sarimax)
-    weights = [ws, 1 - ws]
-else:
-    w_q = 1.0 / (float(bt_q["mae"]) + eps) if not math.isnan(bt_q["mae"]) else 1.0
-    w_s = 1.0 / (float(bt_s["mae"]) + eps) if not math.isnan(bt_s["mae"]) else 1.0
-    s_w = (w_q + w_s) or 1.0
-    weights = [w_s / s_w, w_q / s_w]  # [SARIMAX, QGBR]
+    # Weights per model
+    eps = 1e-6
+    if blend_mode == "Equal weights":
+        weights = [0.5, 0.5]  # [SARIMAX, QGBR]
+    elif blend_mode == "Manual weights" and manual_w_sarimax is not None:
+        ws = float(manual_w_sarimax)
+        weights = [ws, 1 - ws]
+    else:
+        w_q = 1.0 / (float(bt_q.get("mae", float("nan"))) + eps) if not math.isnan(bt_q.get("mae", float("nan"))) else 1.0
+        w_s = 1.0 / (float(bt_s.get("mae", float("nan"))) + eps) if not math.isnan(bt_s.get("mae", float("nan"))) else 1.0
+        s_w = (w_q + w_s) or 1.0
+        weights = [w_s / s_w, w_q / s_w]  # [SARIMAX, QGBR]
 
-m1 = cached_sarimax(prices, steps=horizon)
-m2 = cached_qgbr(prices, steps=horizon)
-blend = blend_forecasts(m1, m2, weights=weights)
-blend = apply_conformal(blend, radius)
+    m1 = cached_sarimax(prices, steps=horizon)
+    m2 = cached_qgbr(prices, steps=horizon)
+    blend = blend_forecasts(m1, m2, weights=weights)
+    blend = apply_conformal(blend, radius)
 
 
 # -----------------------
 # Charts and results
 # -----------------------
-tabs = st.tabs(["Prices & Forecast", "Profit Scenarios", "Accounting", "Risk & Advice", "Quality"])
+tabs = st.tabs(["Data Analysis", "Prices & Forecast", "Profit Scenarios", "Accounting", "Risk & Advice", "Quality"])
 
 with tabs[0]:
+    st.subheader("Data Analysis")
+    # Overview
+    ov = price_overview(prices)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Count", f"{ov['count']}")
+    c2.metric("Start", f"{pd.to_datetime(ov['start']).date() if ov['start'] is not None else '—'}")
+    c3.metric("End", f"{pd.to_datetime(ov['end']).date() if ov['end'] is not None else '—'}")
+    c4.metric("Last", f"{ov['last_value']:,.2f}" if ov.get("last_value") else "—")
+
+    cc1, cc2, cc3 = st.columns(3)
+    cc1.metric("Mean", f"{ov['mean']:,.2f}" if ov.get("mean") else "—")
+    cc2.metric("Median", f"{ov['median']:,.2f}" if ov.get("median") else "—")
+    cc3.metric("Std", f"{ov['std']:,.2f}" if ov.get("std") else "—")
+
+    # Data Quality
+    st.caption("Data Quality")
+    qual = data_quality(prices)
+    st.write({k: v for k, v in qual.items() if k != "gaps"})
+    if qual.get("n_missing_periods", 0) > 0 and isinstance(qual.get("gaps"), pd.DataFrame):
+        st.dataframe(qual["gaps"].head(24))
+
+    st.caption("Rolling Statistics")
+    rs = rolling_stats(prices)
+    fig_rs = go.Figure()
+    fig_rs.add_trace(go.Scatter(x=rs["date"], y=rs["price"], name="price", mode="lines"))
+    for w in (3, 6, 12):
+        if f"ma_{w}" in rs.columns:
+            fig_rs.add_trace(go.Scatter(x=rs["date"], y=rs[f"ma_{w}"], name=f"MA{w}", mode="lines"))
+    st.plotly_chart(fig_rs, use_container_width=True)
+
+    # Seasonality
+    st.caption("Seasonality")
+    prof = monthly_profile(prices)
+    bm = prof["by_month"]
+    fig_bm = px.bar(bm, x="month", y="mean", error_y=bm["std"], title="Average by month-of-year")
+    st.plotly_chart(fig_bm, use_container_width=True)
+    grid = prof["grid"]
+    if grid is not None and len(grid) > 0:
+        fig_hm = go.Figure(data=go.Heatmap(z=grid.values, x=[str(c) for c in grid.columns], y=[str(i) for i in grid.index], colorscale="Viridis"))
+        fig_hm.update_layout(title="Year x Month heatmap (mean price)")
+        st.plotly_chart(fig_hm, use_container_width=True)
+
+    # Seasonality strength
+    ss = seasonal_strength(prices)
+    if ss is not None:
+        st.metric("Seasonality strength", f"{ss:.2f}")
+
+    # Stationarity tests
+    st.caption("Stationarity tests (ADF, KPSS)")
+    stn = st_stationarity(prices)
+    st.write({"ADF p": stn.get("adf_p"), "KPSS p": stn.get("kpss_p")})
+
+    # Decomposition
+    dec = st_decompose(prices)
+    if dec is not None:
+        fig_dec = go.Figure()
+        fig_dec.add_trace(go.Scatter(x=dec["date"], y=dec["observed"], name="observed", opacity=0.5))
+        fig_dec.add_trace(go.Scatter(x=dec["date"], y=dec["trend"], name="trend"))
+        fig_dec.add_trace(go.Scatter(x=dec["date"], y=dec["seasonal"], name="seasonal", opacity=0.7))
+        st.plotly_chart(fig_dec, use_container_width=True)
+
+    # Anomalies and change points
+    an = anomalies_mad(prices)
+    fig_an = go.Figure()
+    fig_an.add_trace(go.Scatter(x=an["date"], y=an["price"], name="price", mode="lines"))
+    outliers = an[an["is_outlier"]]
+    if len(outliers):
+        fig_an.add_trace(go.Scatter(x=outliers["date"], y=outliers["price"], name="outliers", mode="markers", marker=dict(color="crimson", size=8)))
+    cp = change_points(prices)
+    for _, r in cp[cp["is_cp"]].iterrows():
+        fig_an.add_vline(x=r["date"], line_dash="dash", line_color="orange")
+    st.plotly_chart(fig_an, use_container_width=True)
+
+    # Distribution & returns
+    st.caption("Distribution & Returns")
+    dist = distribution_stats(prices)
+    st.write({k: (round(v, 4) if isinstance(v, float) else v) for k, v in dist.items() if k != "quantiles"})
+    if isinstance(dist.get("quantiles"), dict):
+        st.write({"quantiles": {k: round(v, 4) for k, v in dist["quantiles"].items()}})
+    rets = compute_returns(prices)
+    col_r1, col_r2 = st.columns(2)
+    col_r1.plotly_chart(px.histogram(rets.dropna(), x="ret_pct", nbins=40, title="Pct returns"), use_container_width=True)
+    col_r2.plotly_chart(px.histogram(rets.dropna(), x="ret_log", nbins=40, title="Log returns"), use_container_width=True)
+
+    # Drawdowns
+    dd = dd_series(prices)
+    if len(dd):
+        fig_dd = go.Figure()
+        fig_dd.add_trace(go.Scatter(x=dd["date"], y=dd["drawdown"], name="drawdown", fill="tozeroy"))
+        fig_dd.update_yaxes(tickformat=",.0%")
+        fig_dd.update_layout(title="Drawdown from running peak")
+        st.plotly_chart(fig_dd, use_container_width=True)
+
+    # ACF/PACF
+    ap = acf_pacf_values(prices)
+    if ap["acf"] and ap["pacf"]:
+        fig_acf = go.Figure(go.Bar(x=list(range(len(ap["acf"]))), y=ap["acf"], name="ACF"))
+        fig_pacf = go.Figure(go.Bar(x=list(range(len(ap["pacf"]))), y=ap["pacf"], name="PACF"))
+        col_a, col_p = st.columns(2)
+        col_a.plotly_chart(fig_acf, use_container_width=True)
+        col_p.plotly_chart(fig_pacf, use_container_width=True)
+
+    # Clustering of states
+    k = st.slider("Cluster states (KMeans K)", 2, 6, 3)
+    cl = cluster_states(prices, k=k)
+    if cl is not None and len(cl):
+        fig_cl = px.scatter(cl, x="pc1", y="pc2", color=cl["cluster"].astype(str), title="State clusters (PCA projection)")
+        st.plotly_chart(fig_cl, use_container_width=True)
+        st.dataframe(cl[["date", "cluster"]].head(24))
+    else:
+        st.info("Not enough history to cluster states (need ~30+ rows).")
+
+    # Insights & recommendations
+    st.caption("Insights & Recommendations")
+    rep = insights_report(prices)
+    for b in rep.get("bullets", []):
+        st.write(f"- {b}")
+
+with tabs[1]:
     st.subheader("Price History and Forecast")
+    if not ('enable_forecasting' in globals() and enable_forecasting):
+        st.info("Forecasting is disabled. Enable it in the sidebar to compute predictions.")
     # KPIs
     last_price = float(prices.dropna().iloc[-1]["price"]) if len(prices) else float("nan")
     last12 = prices.set_index("date")["price"].last("365D") if len(prices) else pd.Series(dtype=float)
@@ -199,8 +346,10 @@ with tabs[0]:
     fc_csv = blend.to_csv(index=False).encode("utf-8")
     st.download_button("Download forecast (CSV)", data=fc_csv, file_name="price_forecast.csv", mime="text/csv")
 
-with tabs[1]:
+with tabs[2]:
     st.subheader("Profit: Sell Now vs. Future Months")
+    if not ('enable_forecasting' in globals() and enable_forecasting):
+        st.info("Forecasting is disabled. Enable it in the sidebar to see future scenarios.")
     now_profit = profit(last_price, params)
 
     rows = [
@@ -289,7 +438,7 @@ with tabs[1]:
             delta = target_profit - now_profit
             st.metric("Planned month profit (selected)", f"{target_profit:,.0f}", delta=f"{delta:,.0f}")
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("Accounting Overview (TDHP)")
     # Load or example trial balance
     try:
@@ -350,7 +499,9 @@ with tabs[2]:
 
     st.markdown("Budget Forecast (monthly)")
     mon = monthly_income_expense(tb)
-    if len(mon):
+    if not ('enable_forecasting' in globals() and enable_forecasting):
+        st.info("Forecasting is disabled. Enable it in the sidebar to see budget forecasts.")
+    elif len(mon):
         horizon_mon = st.slider("Forecast horizon (months)", 1, 12, min(6, max(3, 12)), 1, key="acct_horizon")
         # Use existing SARIMAX helper by adapting columns
         inc_df = mon[["date", "revenue"]].rename(columns={"revenue": "price"})
@@ -378,8 +529,10 @@ with tabs[2]:
     else:
         st.warning("No 'date' column in trial balance. Monthly budget forecast unavailable. Include a date per entry to enable it.")
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Monte Carlo: Best-Month Profit Distribution")
+    if not ('enable_forecasting' in globals() and enable_forecasting):
+        st.info("Forecasting is disabled. Enable it in the sidebar to run scenario simulations.")
     mc = simulate_profit(blend, params, residuals=bt_q.get("residuals"), n=3000)
     col1, col2, col3 = st.columns(3)
     col1.metric("Expected best-month profit", f"{mc['mean']:,.0f}")
@@ -405,8 +558,10 @@ with tabs[3]:
         h = px.histogram(hist_df, x="profit", nbins=40, title="Distribution of best-month profit (Monte Carlo)")
         st.plotly_chart(h, use_container_width=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Forecast Quality (rolling backtest)")
+    if not ('enable_forecasting' in globals() and enable_forecasting):
+        st.info("Forecasting is disabled. Enable it in the sidebar to compute backtests and metrics.")
     def _safe_round(v, nd=2):
         try:
             return round(float(v), nd)
