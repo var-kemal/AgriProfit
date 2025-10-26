@@ -1,6 +1,6 @@
 ---
 
-# 🌾 AgriProfit
+## 🌾 AgriProfit
 
 **Smarter agriculture data → profit decisions.**
 
