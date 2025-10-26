@@ -62,4 +62,3 @@ def make_example_trial_balance() -> pd.DataFrame:
     df = pd.DataFrame(data)
     df["date"] = pd.to_datetime(df["date"])  # parse date
     return df
-

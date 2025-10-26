@@ -44,7 +44,7 @@ def load_yields_csv(uploaded: Optional[io.BytesIO]) -> pd.DataFrame:
     return df
 
 
-def make_synthetic_prices(start="2021-01-01", periods=48, seed=7) -> pd.DataFrame:
+def make_synthetic_prices(start="2015-01-01", periods=11*12, seed=7) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     dates = pd.date_range(start, periods=periods, freq="MS")
     t = np.arange(periods)

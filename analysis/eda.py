@@ -303,3 +303,64 @@ def insights_report(prices: pd.DataFrame) -> Dict:
         "volatility": {"recent_12m_std": vol_recent, "long_std": vol_long},
         "bullets": bullets,
     }
+
+
+# -----------------------
+# Utilities to print the whole data clearly
+# -----------------------
+
+def full_data_report(df: pd.DataFrame, include_summary: bool = True, include_dtypes: bool = True, max_rows: Optional[int] = None) -> str:
+    """Return a human-readable text of the entire DataFrame (or head/tail if huge).
+
+    - include_summary: add basic stats and shape
+    - include_dtypes: list column dtypes
+    - max_rows: if None, attempt to include all rows; if an integer and len(df) > max_rows,
+      show head and tail around a truncation notice to avoid massive console spam.
+    """
+    parts: List[str] = []
+    n, m = df.shape
+    if include_summary:
+        parts.append(f"Shape: {n} rows × {m} columns")
+    if include_dtypes:
+        dtypes_str = (df.dtypes.astype(str)).to_string()
+        parts.append("\nDtypes:\n" + dtypes_str)
+    if include_summary:
+        try:
+            desc = df.describe(include="all", datetime_is_numeric=True).transpose().to_string()
+            parts.append("\nSummary describe():\n" + desc)
+        except Exception:
+            pass
+
+    # Determine how much to print
+    if (max_rows is None) or (n <= (max_rows or n)):
+        # Print everything
+        with pd.option_context(
+            "display.max_rows", None,
+            "display.max_columns", None,
+            "display.width", 0,
+            "display.max_colwidth", None,
+        ):
+            parts.append("\nFull data:\n" + df.to_string(index=False))
+    else:
+        k = max_rows // 2
+        head_str = df.head(k).to_string(index=False)
+        tail_str = df.tail(k).to_string(index=False)
+        parts.append(f"\nData (truncated to head {k} and tail {k} of {n} rows):\n" + head_str)
+        parts.append("\n... (omitting middle rows) ...\n")
+        parts.append(tail_str)
+
+    return "\n\n".join(parts)
+
+
+def print_full_data(df: pd.DataFrame, max_rows: Optional[int] = None) -> None:
+    """Print the entire DataFrame to stdout (or truncated head/tail if very large).
+
+    Example:
+        from analysis.eda import print_full_data
+        print_full_data(prices_df)               # print all rows/cols
+        print_full_data(prices_df, max_rows=200) # show head 100 + tail 100
+    """
+    text = full_data_report(df, include_summary=True, include_dtypes=True, max_rows=max_rows)
+    print(text)
+
+

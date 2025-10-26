@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 import sys, os
+import io, zipfile
 
 # Ensure repo modules importable when running `streamlit run ui/app_streamlit.py`
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -37,6 +38,8 @@ from analysis.eda import (
     insights_report,
 )
 from uncertainty.conformal import conformal_interval, apply_conformal
+from ultimate_visualizer import create_streamlit_tab
+from ultimate_visualizer import create_streamlit_tab
 
 
 # -----------------------
@@ -190,7 +193,19 @@ if 'enable_forecasting' in globals() and enable_forecasting:
 # -----------------------
 # Charts and results
 # -----------------------
-tabs = st.tabs(["Data Analysis", "Prices & Forecast", "Profit Scenarios", "Accounting", "Risk & Advice", "Quality"])
+tabs = st.tabs([
+    "Data Analysis", 
+    "Prices & Forecast", 
+    "Profit Scenarios", 
+    "Accounting", 
+    "Risk & Advice", 
+    "Quality",
+    "🔬 Ultimate Analysis"  # ← NEW TAB
+])
+
+# Then at the end, add:
+with tabs[6]:  # The new Ultimate Analysis tab
+    create_streamlit_tab(prices)
 
 with tabs[0]:
     st.subheader("Data Analysis")
@@ -310,6 +325,28 @@ with tabs[0]:
     rep = insights_report(prices)
     for b in rep.get("bullets", []):
         st.write(f"- {b}")
+
+    # Download all data (ZIP)
+    st.caption("Download Data")
+    try:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("prices.csv", prices.to_csv(index=False))
+            zf.writestr("costs.csv", costs.to_csv(index=False))
+            zf.writestr("yields.csv", yields_df.to_csv(index=False))
+            # Try to include trial balance if available
+            try:
+                tb_zip = load_trial_balance_csv(up_tb) if up_tb is not None else None
+                if tb_zip is not None and len(tb_zip):
+                    zf.writestr("trial_balance.csv", tb_zip.to_csv(index=False))
+            except Exception:
+                pass
+        buf.seek(0)
+        st.download_button(
+            "Download all datasets (ZIP)", data=buf.getvalue(), file_name="agri_datasets.zip", mime="application/zip"
+        )
+    except Exception as _zip_err:
+        st.warning(f"Could not prepare ZIP: {_zip_err}")
 
 with tabs[1]:
     st.subheader("Price History and Forecast")
