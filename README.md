@@ -1,7 +1,6 @@
 ---
 
-## AgriProfit
-
+# 🌾 AgriProfit
 **Smarter agriculture data → profit decisions.**
 
 AgriProfit helps farmers, analysts, and researchers turn raw **prices, yields, and finance data** into clear insights.
