@@ -7,3 +7,5 @@ __pycache__/
 .ipynb_checkpoints/
 .vscode/
 my-app/
+README.md
+.venv

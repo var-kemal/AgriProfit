@@ -38,6 +38,14 @@ from analysis.eda import (
     insights_report,
 )
 from uncertainty.conformal import conformal_interval, apply_conformal
+from portfolio import (
+    load_portfolio_prices_csv,
+    load_portfolio_allocations_csv,
+    compute_portfolio_metrics,
+    simulate_reallocation,
+)
+from costs import load_input_costs_csv, compute_input_cost_signals
+from finance import project_cash_flows, loan_capacity_estimate, compute_dscr_series
 from ultimate_visualizer import create_streamlit_tab
 from ultimate_visualizer import create_streamlit_tab
 
@@ -80,6 +88,28 @@ with st.sidebar:
     y_t_ha = st.number_input("Yield (tons/ha)", min_value=0.5, max_value=30.0, value=5.0, step=0.1) if y_manual else None
     price_unit = st.selectbox("Price unit", ["per_kg", "per_ton"], index=1)
 
+    st.header("Portfolio Inputs")
+    up_portfolio_prices = st.file_uploader(
+        "Portfolio prices CSV (date,commodity,price)",
+        type=["csv"],
+        key="portfolio_prices",
+        help="Upload multi-commodity price history. Leave empty to use synthetic sample.",
+    )
+    up_portfolio_alloc = st.file_uploader(
+        "Portfolio allocations CSV (commodity,allocation)",
+        type=["csv"],
+        key="portfolio_allocations",
+        help="Optional: current allocation weights. Defaults to equal weights.",
+    )
+
+    st.header("Input Cost History")
+    up_input_costs = st.file_uploader(
+        "Input cost history CSV (date,input,price)",
+        type=["csv"],
+        key="input_costs",
+        help="Track fertilizer, seeds, fuel, etc.",
+    )
+
     st.header("Mode")
     enable_forecasting = st.checkbox("Enable forecasting (experimental)", value=False)
 
@@ -111,6 +141,24 @@ params = FarmParams(
     price_unit=price_unit,
     costs_total=float(costs["amount"].sum() * area),  # assume per-ha costs
 )
+
+try:
+    portfolio_prices = load_portfolio_prices_csv(up_portfolio_prices)
+except Exception as e:
+    st.warning(f"Portfolio prices fallback to sample data: {e}")
+    portfolio_prices = load_portfolio_prices_csv(None)
+
+try:
+    portfolio_allocations = load_portfolio_allocations_csv(up_portfolio_alloc, portfolio_prices["commodity"].unique())
+except Exception as e:
+    st.warning(f"Portfolio allocations fallback to equal weights: {e}")
+    portfolio_allocations = load_portfolio_allocations_csv(None, portfolio_prices["commodity"].unique())
+
+try:
+    input_cost_history = load_input_costs_csv(up_input_costs)
+except Exception as e:
+    st.warning(f"Input cost history fallback to sample data: {e}")
+    input_cost_history = load_input_costs_csv(None)
 
 
 # -----------------------
