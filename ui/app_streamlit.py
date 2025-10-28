@@ -46,6 +46,8 @@ from portfolio import (
 )
 from costs import load_input_costs_csv, compute_input_cost_signals
 from finance import project_cash_flows, loan_capacity_estimate, compute_dscr_series
+from signals.market import compute_market_signals
+from advice.agent import generate_recommendations
 from ultimate_visualizer import create_streamlit_tab
 from ultimate_visualizer import create_streamlit_tab
 
@@ -248,12 +250,91 @@ tabs = st.tabs([
     "Accounting", 
     "Risk & Advice", 
     "Quality",
-    "🔬 Ultimate Analysis"  # ← NEW TAB
+    "🔬 Ultimate Analysis",  # ← NEW TAB
+    "Portfolio",
+    "Costs & Timing",
 ])
 
 # Then at the end, add:
 with tabs[6]:  # The new Ultimate Analysis tab
     create_streamlit_tab(prices)
+
+with tabs[7]:  # Portfolio
+    st.subheader("Multi-Commodity Portfolio")
+    try:
+        metrics = compute_portfolio_metrics(portfolio_prices, portfolio_allocations)
+        st.markdown("Current allocations")
+        st.dataframe(portfolio_allocations)
+        st.markdown("Summary (latest price, annual return/vol, allocation)")
+        st.dataframe(metrics["summary"])
+        st.markdown("Correlation matrix")
+        corr = metrics["correlation"]
+        figc = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="RdBu", origin="lower")
+        st.plotly_chart(figc, use_container_width=True)
+
+        # Reallocation simulator
+        colR1, colR2, colR3 = st.columns(3)
+        commodities = list(metrics["summary"]["commodity"].values)
+        src = colR1.selectbox("Shift from", commodities, index=0)
+        tgt = colR2.selectbox("Shift to", commodities, index=1)
+        sh = colR3.slider("Shift %", 0, 50, 10, 5)
+        if src == tgt:
+            st.info("Select different commodities to simulate reallocation.")
+        else:
+            new_alloc, new_perf = simulate_reallocation(portfolio_prices, portfolio_allocations, src, tgt, sh)
+            st.markdown("New allocations")
+            st.dataframe(new_alloc)
+            st.write({
+                "Portfolio return": f"{new_perf['portfolio_return']:.2%}",
+                "Portfolio vol": f"{new_perf['portfolio_vol']:.2%}",
+            })
+
+        # Price chart
+        st.markdown("Historical prices")
+        figp = px.line(portfolio_prices, x="date", y="price", color="commodity")
+        st.plotly_chart(figp, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Portfolio metrics unavailable: {e}")
+
+with tabs[8]:  # Costs & Timing
+    st.subheader("Input Cost Tracking")
+    try:
+        signals = compute_input_cost_signals(input_cost_history)
+        st.dataframe(pd.DataFrame(signals["summary"]))
+        sel = st.selectbox("View input", sorted(input_cost_history["input"].unique()))
+        s_df = input_cost_history[input_cost_history["input"] == sel]
+        st.plotly_chart(px.line(s_df, x="date", y="price", title=f"{sel} price"), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Input cost tracking unavailable: {e}")
+
+    st.subheader("Market Timing Signals (main price series)")
+    try:
+        ms = compute_market_signals(prices)
+        st.write({
+            "Percentile (36m)": round(ms["metrics"]["percentile_36m"], 3) if ms["metrics"]["percentile_36m"] is not None else None,
+            "Momentum 1m": round(ms["metrics"]["momentum_1m"] * 100, 2) if ms["metrics"]["momentum_1m"] is not None else None,
+            "Momentum 3m": round(ms["metrics"]["momentum_3m"] * 100, 2) if ms["metrics"]["momentum_3m"] is not None else None,
+            "Momentum 6m": round(ms["metrics"]["momentum_6m"] * 100, 2) if ms["metrics"]["momentum_6m"] is not None else None,
+            "MA Cross (P>MA6>MA12)": ms["metrics"]["ma_cross"],
+            "Sell zone": ms["metrics"]["sell_zone"],
+            "Caution zone": ms["metrics"]["caution_zone"],
+        })
+        ser = ms["series"]
+        figm = go.Figure()
+        figm.add_trace(go.Scatter(x=ser["date"], y=ser["price"], name="price"))
+        figm.add_trace(go.Scatter(x=ser["date"], y=ser["ma6"], name="MA6"))
+        figm.add_trace(go.Scatter(x=ser["date"], y=ser["ma12"], name="MA12"))
+        st.plotly_chart(figm, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Market signals unavailable: {e}")
+
+    st.subheader("AI Recommendations")
+    try:
+        recs = generate_recommendations(market=ms, portfolio=metrics, costs=signals)
+        for r in recs:
+            st.write(f"- {r}")
+    except Exception:
+        st.info("Recommendations will appear once above sections compute successfully.")
 
 with tabs[0]:
     st.subheader("Data Analysis")
